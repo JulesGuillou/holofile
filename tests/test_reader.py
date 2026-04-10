@@ -1,3 +1,5 @@
+from unittest.mock import patch
+
 import numpy as np
 import pytest
 
@@ -162,3 +164,178 @@ def test_mmap_read(holo_path):
     with HoloReader(path, mmap=True) as r:
         frames = r.read()
     np.testing.assert_array_equal(frames, expected)
+
+
+def test_mmap_read_step(holo_path):
+    """mmap path with step > 1 (non-contiguous frame access)."""
+    path, expected = holo_path
+    with HoloReader(path, mmap=True) as r:
+        frames = r.read(0, 3, step=2)
+    np.testing.assert_array_equal(frames, expected[::2])
+
+
+def test_read_into_empty_range(holo_path):
+    """read_into with start == stop returns 0 without touching the buffer."""
+    path, _ = holo_path
+    buf = bytearray(0)
+    with HoloReader(path) as r:
+        n = r.read_into(buf, 1, 1)
+    assert n == 0
+
+
+def test_read_into_bytearray(holo_path):
+    """read_into accepts a plain bytearray (buffer protocol)."""
+    path, expected = holo_path
+    frame_size = 4 * 4 * 2
+    buf = bytearray(frame_size)
+    with HoloReader(path) as r:
+        n = r.read_into(buf, 0, 1)
+    assert n == 1
+    np.testing.assert_array_equal(
+        np.frombuffer(buf, dtype="<u2").reshape(4, 4),
+        expected[0],
+    )
+
+
+def test_start_out_of_range(holo_path):
+    path, _ = holo_path
+    with HoloReader(path) as r:
+        with pytest.raises(HoloIndexError):
+            r.read(-1, 2)
+
+
+def test_getitem_int_out_of_range(holo_path):
+    path, _ = holo_path
+    with HoloReader(path) as r:
+        with pytest.raises(HoloIndexError):
+            _ = r[99]
+
+
+def test_getitem_negative_out_of_range(holo_path):
+    path, _ = holo_path
+    with HoloReader(path) as r:
+        with pytest.raises(HoloIndexError):
+            _ = r[-99]
+
+
+def test_footer_malformed_json(tmp_path):
+    """A footer that is not valid JSON is silently ignored."""
+    make_raw_holo(tmp_path / "malformed.holo", footer_json=b"not-json{{")
+    with HoloReader(tmp_path / "malformed.holo") as r:
+        assert r.footer.data == {}
+
+
+def test_footer_load_io_error(holo_path):
+    """An OSError while reading the footer is re-raised as HoloIOError."""
+    from unittest.mock import patch
+    from holofile._exceptions import HoloIOError
+    path, _ = holo_path
+    with HoloReader(path) as r:
+        with patch.object(r._file, "seek", side_effect=OSError("seek fail")):
+            with pytest.raises(HoloIOError, match="seek fail"):
+                _ = r.footer
+
+
+def test_iter_chunks_bytearray_buf(holo_path):
+    """iter_chunks with a raw bytearray buffer yields memoryview slices."""
+    path, expected = holo_path
+    frame_size = 4 * 4 * 2
+    buf = bytearray(2 * frame_size)
+    results = []
+    with HoloReader(path) as r:
+        for chunk in r.iter_chunks(2, buf=buf):
+            results.append(bytes(chunk))
+    first_two = np.frombuffer(results[0], dtype="<u2").reshape(2, 4, 4)
+    np.testing.assert_array_equal(first_two, expected[:2])
+
+
+def test_mmap_io_error(tmp_path):
+    """An OSError from mmap construction is wrapped in HoloIOError."""
+    import mmap as _mmap
+    from unittest.mock import patch
+    from holofile._exceptions import HoloIOError
+    path = tmp_path / "ok.holo"
+    make_raw_holo(path)
+    with patch("mmap.mmap", side_effect=OSError("mmap fail")):
+        with pytest.raises(HoloIOError, match="mmap fail"):
+            HoloReader(path, mmap=True)
+
+
+def test_open_os_error(tmp_path):
+    """A non-FileNotFoundError OSError on open is wrapped in HoloIOError."""
+    from unittest.mock import patch
+    from holofile._exceptions import HoloIOError
+    with patch("builtins.open", side_effect=OSError("permission denied")):
+        with pytest.raises(HoloIOError, match="permission denied"):
+            HoloReader(tmp_path / "fake.holo")
+
+
+def test_read_header_bytes_os_error(tmp_path):
+    """An OSError while reading the 64-byte header is wrapped in HoloIOError."""
+    from unittest.mock import patch, MagicMock
+    from holofile._exceptions import HoloIOError
+    path = tmp_path / "ok.holo"
+    make_raw_holo(path)
+    mock_file = MagicMock()
+    mock_file.read.side_effect = OSError("read fail")
+    mock_file.__enter__ = lambda s: s
+    mock_file.__exit__ = MagicMock(return_value=False)
+    with patch("builtins.open", return_value=mock_file):
+        with pytest.raises(HoloIOError, match="read fail"):
+            HoloReader(path)
+
+
+def test_readinto_returns_zero_step1(tmp_path):
+    """If readinto returns 0 mid-read (step=1 path, line 182) the loop exits gracefully."""
+    path = tmp_path / "trunc.holo"
+    rng = np.random.default_rng(99)
+    frames = rng.integers(0, 65536, (2, 4, 4), dtype=np.uint16)
+    make_raw_holo(path, frames=frames)
+    with HoloReader(path) as r:
+        buf = np.empty((2, 4, 4), dtype=np.dtype("<u2"))
+        original_readinto = r._file.readinto
+        call_count = [0]
+        def fake_readinto_partial(b):
+            call_count[0] += 1
+            if call_count[0] == 1:
+                # Return a partial read (half the buffer) to force a second iteration
+                half = max(1, len(b) // 2)
+                n = original_readinto(memoryview(b)[:half])
+                return n
+            return 0   # ← triggers line 182: if not chunk: break
+        with patch.object(r._file, "readinto", side_effect=fake_readinto_partial):
+            r.read_into(buf)  # exits early without raising
+
+
+def test_readinto_returns_zero_step_gt1(tmp_path):
+    """If readinto returns 0 mid-read (step>1 path, line 194) the loop exits gracefully."""
+    path = tmp_path / "trunc.holo"
+    rng = np.random.default_rng(98)
+    frames = rng.integers(0, 65536, (3, 4, 4), dtype=np.uint16)
+    make_raw_holo(path, frames=frames)
+    with HoloReader(path) as r:
+        buf = np.empty((2, 4, 4), dtype=np.dtype("<u2"))
+        original_readinto = r._file.readinto
+        call_count = [0]
+        def fake_readinto_partial(b):
+            call_count[0] += 1
+            if call_count[0] == 1:
+                half = max(1, len(b) // 2)
+                n = original_readinto(memoryview(b)[:half])
+                return n
+            return 0   # ← triggers line 194: if not chunk: break
+        with patch.object(r._file, "readinto", side_effect=fake_readinto_partial):
+            r.read_into(buf, 0, 3, step=2)  # step > 1 path, exits early without raising
+
+
+def test_read_into_os_error(tmp_path):
+    """An OSError during read_into is wrapped in HoloIOError."""
+    from unittest.mock import patch
+    from holofile._exceptions import HoloIOError
+    path = tmp_path / "ok.holo"
+    make_raw_holo(path)
+    with HoloReader(path) as r:
+        buf = np.empty((3, 4, 4), dtype=np.dtype("<u2"))
+        with patch.object(r._file, "seek", side_effect=OSError("seek fail")):
+            with pytest.raises(HoloIOError, match="seek fail"):
+                r.read_into(buf)

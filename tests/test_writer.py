@@ -155,3 +155,110 @@ def test_set_footer_dict(tmp_path):
         w.set_footer({"key": "value"})
     with HoloReader(p) as r:
         assert r.footer.get("key") == "value"
+
+
+def test_append_file_not_found(tmp_path):
+    with pytest.raises(FileNotFoundError):
+        HoloWriter(tmp_path / "no.holo", bit_depth=16, width=4, height=4, append=True)
+
+
+def test_append_os_error(tmp_path):
+    """An OSError other than FileNotFoundError on append open becomes HoloIOError."""
+    from unittest.mock import patch
+    from holofile._exceptions import HoloIOError
+    p = tmp_path / "fake.holo"
+    # make file exist but make open raise a generic OSError
+    p.write_bytes(b"x")
+    with patch("builtins.open", side_effect=OSError("permission denied")):
+        with pytest.raises(HoloIOError, match="permission denied"):
+            HoloWriter(p, bit_depth=16, width=4, height=4, append=True)
+
+
+def test_create_os_error(tmp_path):
+    """An OSError other than FileExistsError on create becomes HoloIOError."""
+    from unittest.mock import patch
+    from holofile._exceptions import HoloIOError
+    with patch("builtins.open", side_effect=OSError("no space")):
+        with pytest.raises(HoloIOError, match="no space"):
+            HoloWriter(tmp_path / "new.holo", bit_depth=16, width=4, height=4)
+
+
+def test_write_placeholder_os_error(tmp_path):
+    """An OSError while writing the placeholder header becomes HoloIOError."""
+    from unittest.mock import patch, MagicMock
+    from holofile._exceptions import HoloIOError
+    p = tmp_path / "new.holo"
+    mock_file = MagicMock()
+    mock_file.write.side_effect = OSError("write fail")
+    mock_file.closed = False
+    with patch("builtins.open", return_value=mock_file):
+        with pytest.raises(HoloIOError, match="write fail"):
+            HoloWriter(p, bit_depth=16, width=4, height=4)
+
+
+def test_write_ndim_error(tmp_path):
+    """write() with a 1-D or 4-D array raises HoloShapeError."""
+    p = tmp_path / "ndim.holo"
+    with HoloWriter(p, bit_depth=16, width=4, height=4) as w:
+        bad = np.zeros(16, dtype=np.dtype("<u2"))
+        with pytest.raises(HoloShapeError, match="2-D"):
+            w.write(bad)
+
+
+def test_write_3d_shape_mismatch(tmp_path):
+    """write() with 3-D array but wrong spatial dims raises HoloShapeError."""
+    p = tmp_path / "3d_shape.holo"
+    with HoloWriter(p, bit_depth=16, width=4, height=4) as w:
+        bad = np.zeros((2, 8, 8), dtype=np.dtype("<u2"))
+        with pytest.raises(HoloShapeError):
+            w.write(bad)
+
+
+def test_write_io_error(tmp_path):
+    """An OSError during frame write becomes HoloIOError."""
+    from unittest.mock import patch
+    from holofile._exceptions import HoloIOError
+    p = tmp_path / "write_io.holo"
+    frames = _make_frames(1)
+    with HoloWriter(p, bit_depth=16, width=4, height=4) as w:
+        with patch.object(w._file, "write", side_effect=OSError("disk full")):
+            with pytest.raises(HoloIOError, match="disk full"):
+                w.write(frames[0])
+
+
+def test_close_os_error(tmp_path):
+    """An OSError during close() (_patch_header) is wrapped in HoloIOError."""
+    from unittest.mock import patch
+    from holofile._exceptions import HoloIOError
+    p = tmp_path / "close_err.holo"
+    w = HoloWriter(p, bit_depth=16, width=4, height=4)
+    with patch.object(w._file, "seek", side_effect=OSError("disk fail")):
+        with pytest.raises(HoloIOError, match="disk fail"):
+            w.close()
+
+
+def test_close_idempotent(tmp_path):
+    """Calling close() twice should not raise."""
+    p = tmp_path / "close.holo"
+    w = HoloWriter(p, bit_depth=16, width=4, height=4)
+    w.close()
+    w.close()   # second call is a no-op
+
+
+def test_header_property_reflects_written(tmp_path):
+    p = tmp_path / "live.holo"
+    frames = _make_frames(2)
+    with HoloWriter(p, bit_depth=16, width=4, height=4) as w:
+        assert w.header.num_frames == 0
+        w.write(frames)
+        assert w.header.num_frames == 2
+
+
+def test_write_all_data_types(tmp_path):
+    for dt, name in [(DataType.RAW, "raw"), (DataType.PROCESSED, "proc"), (DataType.MOMENTS, "mom")]:
+        p = tmp_path / f"{name}.holo"
+        frames = _make_frames(1)
+        with HoloWriter(p, bit_depth=16, width=4, height=4, data_type=dt) as w:
+            w.write(frames)
+        with HoloReader(p) as r:
+            assert r.header.data_type == dt

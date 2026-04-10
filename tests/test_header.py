@@ -93,3 +93,46 @@ def test_dtype_big_endian():
 def test_header_too_short():
     with pytest.raises(HoloFormatError, match="short"):
         HoloHeader.from_bytes(b"HOLO")
+
+
+def test_unknown_endian_value():
+    raw = _make_raw_header(endian=99)
+    with pytest.raises(HoloFormatError, match="endian"):
+        HoloHeader.from_bytes(raw)
+
+
+def test_unknown_data_type_value():
+    raw = _make_raw_header(data_type=99)
+    with pytest.raises(HoloFormatError, match="data_type"):
+        HoloHeader.from_bytes(raw)
+
+
+def test_dtype_odd_bit_depth_raises():
+    # Construct a header with bit_depth=12 by bypassing the dataclass
+    # (the validator lives in dtype, not __init__)
+    import dataclasses
+    h = HoloHeader(
+        version=VERSION, bit_depth=12, width=4, height=4,
+        num_frames=1, data_size=0, endian=Endian.LITTLE, data_type=DataType.RAW,
+    )
+    with pytest.raises(HoloFormatError, match="multiple of 8"):
+        _ = h.dtype
+
+
+def test_dtype_32bit():
+    h = HoloHeader(
+        version=VERSION, bit_depth=32, width=4, height=4,
+        num_frames=1, data_size=64, endian=Endian.LITTLE, data_type=DataType.RAW,
+    )
+    assert h.dtype == np.dtype("<u4")
+
+
+def test_from_bytes_memoryview():
+    """from_bytes should accept a memoryview, not just bytes."""
+    h = HoloHeader(
+        version=VERSION, bit_depth=16, width=4, height=4,
+        num_frames=1, data_size=32, endian=Endian.LITTLE, data_type=DataType.RAW,
+    )
+    raw = bytearray(h.to_bytes())
+    h2 = HoloHeader.from_bytes(memoryview(raw))
+    assert h == h2

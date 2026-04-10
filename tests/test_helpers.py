@@ -45,3 +45,46 @@ def test_inspect_keys(holo_path):
 def test_read_header_file_not_found(tmp_path):
     with pytest.raises(FileNotFoundError):
         read_header(tmp_path / "no.holo")
+
+
+def test_read_header_io_error(tmp_path):
+    from unittest.mock import patch, mock_open
+    from holofile._exceptions import HoloIOError
+    with patch("builtins.open", side_effect=OSError("disk error")):
+        with pytest.raises(HoloIOError, match="disk error"):
+            read_header(tmp_path / "fake.holo")
+
+
+def test_read_footer_io_error(holo_path):
+    from unittest.mock import patch
+    from holofile._exceptions import HoloIOError
+    path, _ = holo_path
+    original_open = open
+    call_count = 0
+
+    def patched_open(p, mode="r", *args, **kwargs):
+        nonlocal call_count
+        call_count += 1
+        if call_count == 2:   # second open is the footer read
+            raise OSError("seek error")
+        return original_open(p, mode, *args, **kwargs)
+
+    with patch("holofile._helpers.open", patched_open):
+        with pytest.raises(HoloIOError, match="seek error"):
+            read_footer(path)
+
+
+def test_read_footer_malformed_json(tmp_path):
+    """A footer that is not valid JSON returns an empty footer instead of raising."""
+    make_raw_holo(tmp_path / "malformed.holo", footer_json=b"not-json{{{")
+    f = read_footer(tmp_path / "malformed.holo")
+    assert f.data == {}
+
+
+def test_inspect_io_error_on_getsize(holo_path):
+    from unittest.mock import patch
+    from holofile._exceptions import HoloIOError
+    path, _ = holo_path
+    with patch("os.path.getsize", side_effect=OSError("stat fail")):
+        with pytest.raises(HoloIOError, match="stat fail"):
+            inspect(path)
