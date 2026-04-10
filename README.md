@@ -8,16 +8,22 @@ Provides a `HoloReader` / `HoloWriter` API and a `holo` CLI for reading, writing
 
 ## Installation
 
+> **Note:** holofile is not yet published on PyPI. Install directly from the repository.
+
 Requires Python ≥ 3.11 and [uv](https://docs.astral.sh/uv/).
 
 ```bash
-uv add holofile
+git clone https://github.com/JulesGuillou/holofile.git
+cd holofile
+uv sync
 ```
 
 Or with pip:
 
 ```bash
-pip install holofile
+git clone https://github.com/JulesGuillou/holofile.git
+cd holofile
+pip install .
 ```
 
 ---
