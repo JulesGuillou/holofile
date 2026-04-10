@@ -185,6 +185,8 @@ The `holo` command is installed automatically.
 ```bash
 holo inspect acquisition.holo
 holo inspect acquisition.holo --json
+holo inspect acquisition.holo --header-only        # skip footer, faster on large files
+holo inspect acquisition.holo --header-only --json
 ```
 
 ### `read`

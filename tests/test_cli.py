@@ -39,6 +39,25 @@ def test_inspect_json(holo_path):
     assert data["width"] == 4
 
 
+def test_inspect_header_only(holo_path):
+    path, _ = holo_path
+    code, out, _ = run_holo("inspect", str(path), "--header-only")
+    assert code == 0
+    text = out.decode()
+    assert "Frames" in text
+    assert "Footer" not in text
+
+
+def test_inspect_header_only_json(holo_path):
+    path, _ = holo_path
+    code, out, _ = run_holo("inspect", str(path), "--header-only", "--json")
+    assert code == 0
+    data = json.loads(out)
+    assert data["num_frames"] == 3
+    assert "footer" not in data
+    assert "file" not in data
+
+
 def test_inspect_nonexistent(tmp_path):
     code, _, _ = run_holo("inspect", str(tmp_path / "no.holo"))
     assert code in (1, 2)

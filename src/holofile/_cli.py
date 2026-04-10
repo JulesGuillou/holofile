@@ -7,7 +7,7 @@ import sys
 from ._enums import DataType, Endian
 from ._exceptions import HoloError, HoloFormatError, HoloIOError
 from ._footer import HoloFooter
-from ._helpers import inspect as holo_inspect
+from ._helpers import inspect as holo_inspect, read_header
 from ._reader import HoloReader
 from ._writer import HoloWriter
 
@@ -18,6 +18,40 @@ _EXIT_ARGS = 3
 
 
 def _cmd_inspect(args: argparse.Namespace) -> int:
+    if args.header_only:
+        try:
+            h = read_header(args.file)
+        except HoloFormatError as e:
+            print(f"Format error: {e}", file=sys.stderr)
+            return _EXIT_FORMAT
+        except (HoloIOError, OSError) as e:
+            print(f"I/O error: {e}", file=sys.stderr)
+            return _EXIT_IO
+
+        if args.json:
+            print(json.dumps({
+                "version":    h.version,
+                "bit_depth":  h.bit_depth,
+                "width":      h.width,
+                "height":     h.height,
+                "num_frames": h.num_frames,
+                "data_size":  h.data_size,
+                "frame_size": h.frame_size,
+                "endian":     h.endian.name.lower(),
+                "data_type":  h.data_type.name.lower(),
+            }, indent=2))
+        else:
+            print(f"Version   : {h.version}")
+            print(f"Bit depth : {h.bit_depth}")
+            print(f"Width     : {h.width}")
+            print(f"Height    : {h.height}")
+            print(f"Frames    : {h.num_frames}")
+            print(f"Data size : {h.data_size} bytes")
+            print(f"Frame size: {h.frame_size} bytes")
+            print(f"Endian    : {h.endian.name.lower()}")
+            print(f"Data type : {h.data_type.name.lower()}")
+        return _EXIT_OK
+
     try:
         info = holo_inspect(args.file)
     except HoloFormatError as e:
@@ -240,6 +274,8 @@ def _build_parser() -> argparse.ArgumentParser:
     p_inspect = sub.add_parser("inspect", help="Print header + footer summary")
     p_inspect.add_argument("file")
     p_inspect.add_argument("--json", action="store_true", help="Machine-readable JSON output")
+    p_inspect.add_argument("--header-only", action="store_true", dest="header_only",
+                           help="Print only header fields (skips footer, faster on large files)")
 
     # read
     p_read = sub.add_parser("read", help="Extract frame range to stdout or file")
